@@ -112,9 +112,9 @@ function generateWorkoutPlan({
 
   const plan = split.map(day => {
     const dayGroups = day.groups;
+    // include all candidates (finishers will be reserved later)
     const candidates = safeExercises.filter(ex => {
-      // match if any group intersects OR if it's a general finisher/core
-      return (ex.muscleGroups || []).some(m => dayGroups.includes(m)) || (ex.isFinisher && dayGroups.includes('core'));
+      return (ex.muscleGroups || []).some(m => dayGroups.includes(m)) || ex.isFinisher;
     });
 
     // Sort candidates by score descending
@@ -123,45 +123,50 @@ function generateWorkoutPlan({
       .sort((a,b) => b.score - a.score)
       .map(s => s.ex);
 
+    // Reserve 1 slot for finisher if any finishers exist for this day
+    const finishers = sorted.filter(e => (e.isFinisher || (e.muscleGroups||[]).some(m => ['core','traps','grip'].includes(m))));
+    const reserveFinisher = finishers.length > 0 ? 1 : 0;
+    const targetMainSlots = Math.max(1, exercisesPerDay - reserveFinisher);
+
     // Selection strategy:
     // 1) Pick up to 2 primary/main lifts (isPrimary)
-    // 2) Then pick compounds until 2-3 total
-    // 3) Then accessories
-    // 4) Always append 1 finisher/core/grip/traps if available (isFinisher or muscleGroups includes core/traps/grip)
+    // 2) Then pick compounds until targetMainSlots
+    // 3) Then accessories until targetMainSlots
+    // 4) Append 1 finisher if reserved
 
     const chosen = [];
 
-    const pickUnique = (arr, n) => {
+    const pickUniqueUpTo = (arr, maxTotal) => {
       for (const item of arr) {
-        if (chosen.length >= n) break;
+        if (chosen.length >= maxTotal) break;
         if (!chosen.includes(item)) chosen.push(item);
       }
     };
 
     const primaries = sorted.filter(e => e.isPrimary);
-    pickUnique(primaries, 2);
+    pickUniqueUpTo(primaries, Math.min(2, targetMainSlots));
 
     const compounds = sorted.filter(e => e.isCompound && !chosen.includes(e));
-    pickUnique(compounds, 3);
+    pickUniqueUpTo(compounds, targetMainSlots);
 
     const accessories = sorted.filter(e => !e.isCompound && !e.isFinisher && !chosen.includes(e));
-    pickUnique(accessories, exercisesPerDay);
+    pickUniqueUpTo(accessories, targetMainSlots);
 
-    // Finishers: core/traps/grip or marked isFinisher — try to include one at end
-    const finishers = sorted.filter(e => (e.isFinisher || (e.muscleGroups||[]).some(m => ['core','traps','grip'].includes(m))) && !chosen.includes(e));
-    if (finishers.length > 0 && chosen.length < exercisesPerDay) {
-      pickUnique(finishers, exercisesPerDay);
-    }
-
-    // Fallback fill
-    if (chosen.length < Math.min(exercisesPerDay, 4)) {
+    // If we still have room (rare), fill from sorted candidates
+    if (chosen.length < targetMainSlots) {
       for (const c of sorted) {
-        if (chosen.length >= Math.min(exercisesPerDay, 5)) break;
-        if (!chosen.includes(c)) chosen.push(c);
+        if (chosen.length >= targetMainSlots) break;
+        if (!chosen.includes(c) && !(c.isFinisher)) chosen.push(c);
       }
     }
 
-    // Map to plan items
+    // Append one finisher at the end if reserved and available
+    if (reserveFinisher === 1) {
+      const fin = finishers.find(f => !chosen.includes(f));
+      if (fin) chosen.push(fin);
+    }
+
+    // Final trim to exercisesPerDay and map to plan items
     const items = chosen.slice(0, exercisesPerDay).map(ex => ({
       id: ex.id,
       name: ex.name,
