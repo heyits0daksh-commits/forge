@@ -1,0 +1,16 @@
+/* src/styles/workout.css */
+.injury-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border, #ddd);
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--card-bg, #fff);
+}
+
+/* scrollbar for WebKit */
+.injury-list::-webkit-scrollbar { width: 8px; }
+.injury-list::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 4px; }
+
+/* basic utility */
+button { cursor: pointer; }
