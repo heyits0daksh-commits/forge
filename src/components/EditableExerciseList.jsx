@@ -1,5 +1,50 @@
 import React, { useState, useEffect } from 'react';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+// Sortable item wrapper using dnd-kit
+function SortableItem({ item, index, onMoveUp, onMoveDown, onRemove }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    gap: 8,
+    alignItems: 'center',
+    padding: 8,
+    marginBottom: 6,
+    background: isDragging ? '#f0f8ff' : 'transparent',
+    borderRadius: 4,
+  };
+
+  return (
+    <li ref={setNodeRef} style={style} {...attributes}>
+      <div {...listeners} style={{ cursor: 'grab', paddingRight: 8 }} aria-label="drag-handle">☰</div>
+      <div style={{ flex: 1 }}>
+        <strong>{item.name}</strong>
+        <div style={{ fontSize: 12, color: '#666' }}>{item.sets} sets × {item.reps}</div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={() => onMoveUp(index)} aria-label="move up">↑</button>
+        <button onClick={() => onMoveDown(index)} aria-label="move down">↓</button>
+        <button onClick={() => onRemove(item.id)}>Remove</button>
+      </div>
+    </li>
+  );
+}
 
 // Props:
 // initialExercises: [{id,name,sets,reps}]
@@ -16,7 +61,8 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
         return;
       } catch {}
     }
-    setExercises(initialExercises);
+    // normalize ids to strings
+    setExercises(initialExercises.map(p => ({ ...p, id: p.id ? String(p.id) : Date.now().toString() })));
   }, [initialExercises, storageKey]);
 
   useEffect(() => {
@@ -37,19 +83,13 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
 
   function moveUp(index) {
     if (index === 0) return;
-    setExercises(prev => {
-      const arr = Array.from(prev);
-      [arr[index-1], arr[index]] = [arr[index], arr[index-1]];
-      return arr;
-    });
+    setExercises(prev => arrayMove(prev, index, index - 1));
   }
 
   function moveDown(index) {
     setExercises(prev => {
       if (index === prev.length - 1) return prev;
-      const arr = Array.from(prev);
-      [arr[index+1], arr[index]] = [arr[index], arr[index+1]];
-      return arr;
+      return arrayMove(prev, index, index + 1);
     });
   }
 
@@ -74,69 +114,38 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
     reader.readAsText(file);
   }
 
-  // react-beautiful-dnd helpers
-  function reorder(list, startIndex, endIndex) {
-    const result = Array.from(list);
-    const [removed] = result.splice(startIndex, 1);
-    result.splice(endIndex, 0, removed);
-    return result;
-  }
+  // dnd-kit sensors
+  const sensors = useSensors(useSensor(PointerSensor));
 
-  function onDragEnd(result) {
-    if (!result.destination) return;
-    const newList = reorder(exercises, result.source.index, result.destination.index);
-    setExercises(newList);
+  function handleDragEnd(event) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = exercises.findIndex(e => e.id === active.id);
+    const newIndex = exercises.findIndex(e => e.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    setExercises(prev => arrayMove(prev, oldIndex, newIndex));
   }
 
   return (
     <div>
       <h3>Exercises</h3>
 
-      <DragDropContext onDragEnd={onDragEnd}>
-        <Droppable droppableId="exercises-droppable">
-          {(provided) => (
-            <ul
-              {...provided.droppableProps}
-              ref={provided.innerRef}
-              style={{ listStyle: 'none', padding: 0, margin: 0 }}
-            >
-              {exercises.map((ex, i) => (
-                <Draggable key={ex.id} draggableId={ex.id} index={i}>
-                  {(providedDraggable, snapshot) => (
-                    <li
-                      ref={providedDraggable.innerRef}
-                      {...providedDraggable.draggableProps}
-                      {...providedDraggable.dragHandleProps}
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        alignItems: 'center',
-                        padding: 8,
-                        marginBottom: 6,
-                        background: snapshot.isDragging ? '#f0f8ff' : 'transparent',
-                        borderRadius: 4,
-                        ...providedDraggable.draggableProps.style
-                      }}
-                    >
-                      <div style={{ flex: 1 }}>
-                        <strong>{ex.name}</strong>
-                        <div style={{ fontSize: 12, color: '#666' }}>{ex.sets} sets × {ex.reps}</div>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button onClick={() => moveUp(i)} aria-label="move up">↑</button>
-                        <button onClick={() => moveDown(i)} aria-label="move down">↓</button>
-                        <button onClick={() => removeExercise(ex.id)}>Remove</button>
-                      </div>
-                    </li>
-                  )}
-                </Draggable>
-              ))}
-              {provided.placeholder}
-            </ul>
-          )}
-        </Droppable>
-      </DragDropContext>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={exercises.map(e => e.id)} strategy={verticalListSortingStrategy}>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {exercises.map((ex, i) => (
+              <SortableItem
+                key={ex.id}
+                item={ex}
+                index={i}
+                onMoveUp={moveUp}
+                onMoveDown={moveDown}
+                onRemove={removeExercise}
+              />
+            ))}
+          </ul>
+        </SortableContext>
+      </DndContext>
 
       <div style={{ marginTop: 8 }}>
         <input
@@ -158,7 +167,7 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, color: '#444' }}>
-        Tip: Drag the exercise by the item to reorder. If drag doesn't work, run <code>npm install react-beautiful-dnd</code>.
+        Tip: Drag the exercise by the handle (☰) to reorder. If dragging doesn't work, run <code>npm install @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities</code>.
       </div>
     </div>
   );
