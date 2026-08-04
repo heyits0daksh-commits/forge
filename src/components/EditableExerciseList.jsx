@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 // Props:
 // initialExercises: [{id,name,sets,reps}]
@@ -26,7 +27,7 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
   function addExercise() {
     const name = newName.trim();
     if (!name) return;
-    setExercises(prev => [...prev, { id: Date.now(), name, sets: 3, reps: '6-12' }]);
+    setExercises(prev => [...prev, { id: Date.now().toString(), name, sets: 3, reps: '6-12' }]);
     setNewName('');
   }
 
@@ -37,7 +38,7 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
   function moveUp(index) {
     if (index === 0) return;
     setExercises(prev => {
-      const arr = [...prev];
+      const arr = Array.from(prev);
       [arr[index-1], arr[index]] = [arr[index], arr[index-1]];
       return arr;
     });
@@ -46,7 +47,7 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
   function moveDown(index) {
     setExercises(prev => {
       if (index === prev.length - 1) return prev;
-      const arr = [...prev];
+      const arr = Array.from(prev);
       [arr[index+1], arr[index]] = [arr[index], arr[index+1]];
       return arr;
     });
@@ -65,7 +66,7 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
     reader.onload = e => {
       try {
         const parsed = JSON.parse(e.target.result);
-        if (Array.isArray(parsed)) setExercises(parsed);
+        if (Array.isArray(parsed)) setExercises(parsed.map(p => ({ ...p, id: p.id ? String(p.id) : Date.now().toString() })));
       } catch (err) {
         alert('Invalid JSON');
       }
@@ -73,24 +74,69 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
     reader.readAsText(file);
   }
 
+  // react-beautiful-dnd helpers
+  function reorder(list, startIndex, endIndex) {
+    const result = Array.from(list);
+    const [removed] = result.splice(startIndex, 1);
+    result.splice(endIndex, 0, removed);
+    return result;
+  }
+
+  function onDragEnd(result) {
+    if (!result.destination) return;
+    const newList = reorder(exercises, result.source.index, result.destination.index);
+    setExercises(newList);
+  }
+
   return (
     <div>
       <h3>Exercises</h3>
-      <ul>
-        {exercises.map((ex, i) => (
-          <li key={ex.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div>
-              <strong>{ex.name}</strong>
-              <div style={{ fontSize: 12, color: '#666' }}>{ex.sets} sets × {ex.reps}</div>
-            </div>
-            <div style={{ marginLeft: 'auto' }}>
-              <button onClick={() => moveUp(i)} aria-label="move up">↑</button>
-              <button onClick={() => moveDown(i)} aria-label="move down">↓</button>
-              <button onClick={() => removeExercise(ex.id)}>Remove</button>
-            </div>
-          </li>
-        ))}
-      </ul>
+
+      <DragDropContext onDragEnd={onDragEnd}>
+        <Droppable droppableId="exercises-droppable">
+          {(provided) => (
+            <ul
+              {...provided.droppableProps}
+              ref={provided.innerRef}
+              style={{ listStyle: 'none', padding: 0, margin: 0 }}
+            >
+              {exercises.map((ex, i) => (
+                <Draggable key={ex.id} draggableId={ex.id} index={i}>
+                  {(providedDraggable, snapshot) => (
+                    <li
+                      ref={providedDraggable.innerRef}
+                      {...providedDraggable.draggableProps}
+                      {...providedDraggable.dragHandleProps}
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        padding: 8,
+                        marginBottom: 6,
+                        background: snapshot.isDragging ? '#f0f8ff' : 'transparent',
+                        borderRadius: 4,
+                        ...providedDraggable.draggableProps.style
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <strong>{ex.name}</strong>
+                        <div style={{ fontSize: 12, color: '#666' }}>{ex.sets} sets × {ex.reps}</div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={() => moveUp(i)} aria-label="move up">↑</button>
+                        <button onClick={() => moveDown(i)} aria-label="move down">↓</button>
+                        <button onClick={() => removeExercise(ex.id)}>Remove</button>
+                      </div>
+                    </li>
+                  )}
+                </Draggable>
+              ))}
+              {provided.placeholder}
+            </ul>
+          )}
+        </Droppable>
+      </DragDropContext>
 
       <div style={{ marginTop: 8 }}>
         <input
@@ -109,6 +155,10 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
           onChange={e => e.target.files && importJSON(e.target.files[0])}
           style={{ marginLeft: 8 }}
         />
+      </div>
+
+      <div style={{ marginTop: 10, fontSize: 12, color: '#444' }}>
+        Tip: Drag the exercise by the item to reorder. If drag doesn't work, run <code>npm install react-beautiful-dnd</code>.
       </div>
     </div>
   );
