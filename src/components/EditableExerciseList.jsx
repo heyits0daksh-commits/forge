@@ -3,6 +3,7 @@ import {
   DndContext,
   closestCenter,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -52,6 +53,7 @@ function SortableItem({ item, index, onMoveUp, onMoveDown, onRemove }) {
 export default function EditableExerciseList({ initialExercises = [], storageKey = 'customWorkout', onChange }) {
   const [exercises, setExercises] = useState([]);
   const [newName, setNewName] = useState('');
+  const [longPressDrag, setLongPressDrag] = useState(true); // default to long-press on mobile for stability
 
   useEffect(() => {
     const saved = localStorage.getItem(storageKey);
@@ -114,8 +116,11 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
     reader.readAsText(file);
   }
 
-  // dnd-kit sensors
-  const sensors = useSensors(useSensor(PointerSensor));
+  // dnd-kit sensors: include PointerSensor for mouse and TouchSensor for touch
+  const pointerSensor = useSensor(PointerSensor, { activationConstraint: { distance: 5 } });
+  // For touch we allow toggling between long-press activation or immediate drag.
+  const touchSensor = useSensor(TouchSensor, longPressDrag ? { activationConstraint: { delay: 250, tolerance: 5 } } : {});
+  const sensors = useSensors(pointerSensor, touchSensor);
 
   function handleDragEnd(event) {
     const { active, over } = event;
@@ -129,6 +134,14 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
   return (
     <div>
       <h3>Exercises</h3>
+
+      <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={longPressDrag} onChange={() => setLongPressDrag(v => !v)} />
+          Use long-press to start drag on touch devices
+        </label>
+        <div style={{ fontSize: 12, color: '#666' }}>Toggle long-press for more reliable touch drags on mobile.</div>
+      </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={exercises.map(e => e.id)} strategy={verticalListSortingStrategy}>
@@ -167,7 +180,7 @@ export default function EditableExerciseList({ initialExercises = [], storageKey
       </div>
 
       <div style={{ marginTop: 10, fontSize: 12, color: '#444' }}>
-        Tip: Drag the exercise by the handle (☰) to reorder. If dragging doesn't work, run <code>npm install @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities</code>.
+        Tip: Drag the exercise by the handle (☰) to reorder. Toggle long-press to require holding for 250ms before drag starts on touch devices.
       </div>
     </div>
   );
