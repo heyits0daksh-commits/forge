@@ -75,12 +75,13 @@ function generateSplit(daysPerWeek = 3) {
 
 function filterExercisesForInjuries(exercises, injuries = []) {
   // exercises: [{ id, name, muscleGroups: [] }]
+  if (!Array.isArray(exercises) || exercises.length === 0) return [];
   if (!injuries || injuries.length === 0) return exercises;
-  const inj = injuries.map(i => i.toLowerCase());
+  const inj = new Set(injuries.map(i => String(i).toLowerCase().trim()));
   return exercises.filter(ex => {
-    const mg = (ex.muscleGroups || []).map(m => m.toLowerCase());
+    const mg = (ex.muscleGroups || []).map(m => String(m).toLowerCase().trim());
     // remove exercise if any muscle group matches an injury
-    return !mg.some(m => inj.includes(m));
+    return !mg.some(m => inj.has(m));
   });
 }
 
@@ -95,36 +96,59 @@ function generateWorkoutPlan({
 } = {}) {
   // Build split then pick exercises from DB while avoiding injuries and balancing volume.
   const split = generateSplit(daysPerWeek);
+
+  if (!Array.isArray(exercisesDB) || exercisesDB.length === 0) {
+    // Return empty exercise lists for each day — UI should handle empty days gracefully
+    return split.map(day => ({ dayName: day.name, exercises: [] }));
+  }
+
   const safeExercises = filterExercisesForInjuries(exercisesDB, injuries);
 
   // Helper to score exercises so we can pick main lifts first, then compounds, then accessories, then finishers
-  function scoreExerciseForDay(ex, dayGroups) {
-    const mg = (ex.muscleGroups || []).map(m => m.toLowerCase());
-    const groupMatch = mg.filter(m => dayGroups.includes(m)).length;
+  function scoreExerciseForDay(ex, daySet) {
+    const mg = (ex.muscleGroups || []).map(m => String(m).toLowerCase().trim());
+    const groupMatch = mg.filter(m => daySet.has(m)).length;
     let score = groupMatch * 10; // match muscle groups strongly
     if (ex.isPrimary) score += 50; // main lifts (squat, deadlift, bench, OHP, row, pull-up)
     if (ex.isCompound) score += 20; // compounds preferred
     if (ex.isFinisher) score -= 5; // finishers lower priority in main picks
-    // small tiebreakers by difficulty or id
-    if (ex.difficulty) score += (5 - (ex.difficulty || 3));
+    // small tiebreakers by difficulty
+    const diff = Number(ex.difficulty) || 3;
+    score += (5 - diff);
     return score;
   }
 
   const plan = split.map(day => {
-    const dayGroups = day.groups;
+    const dayGroups = day.groups || [];
+    const daySet = new Set(dayGroups.map(g => String(g).toLowerCase().trim()));
+
     // include all candidates (finishers will be reserved later)
     const candidates = safeExercises.filter(ex => {
-      return (ex.muscleGroups || []).some(m => dayGroups.includes(m)) || ex.isFinisher;
+      const mg = (ex.muscleGroups || []).map(m => String(m).toLowerCase().trim());
+      return mg.some(m => daySet.has(m)) || ex.isFinisher;
     });
 
-    // Sort candidates by score descending
-    const sorted = candidates
-      .map(ex => ({ ex, score: scoreExerciseForDay(ex, dayGroups) }))
-      .sort((a,b) => b.score - a.score)
-      .map(s => s.ex);
+    // If no candidates, return empty day
+    if (!candidates || candidates.length === 0) {
+      return { dayName: day.name, exercises: [] };
+    }
+
+    // Sort candidates by score descending with deterministic tie-breaker
+    const scored = candidates
+      .map(ex => ({ ex, score: scoreExerciseForDay(ex, daySet) }))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        // prefer primary
+        if ((b.ex.isPrimary ? 1 : 0) !== (a.ex.isPrimary ? 1 : 0)) return (b.ex.isPrimary ? 1 : 0) - (a.ex.isPrimary ? 1 : 0);
+        // prefer compound
+        if ((b.ex.isCompound ? 1 : 0) !== (a.ex.isCompound ? 1 : 0)) return (b.ex.isCompound ? 1 : 0) - (a.ex.isCompound ? 1 : 0);
+        return a.ex.name.localeCompare(b.ex.name);
+      });
+
+    const sorted = scored.map(s => s.ex);
 
     // Reserve 1 slot for finisher if any finishers exist for this day
-    const finishers = sorted.filter(e => (e.isFinisher || (e.muscleGroups||[]).some(m => ['core','traps','grip'].includes(m))));
+    const finishers = sorted.filter(e => (e.isFinisher || (e.muscleGroups || []).map(m => String(m).toLowerCase().trim()).some(m => ['core', 'traps', 'grip'].includes(m))));
     const reserveFinisher = finishers.length > 0 ? 1 : 0;
     const targetMainSlots = Math.max(1, exercisesPerDay - reserveFinisher);
 
@@ -135,35 +159,47 @@ function generateWorkoutPlan({
     // 4) Append 1 finisher if reserved
 
     const chosen = [];
+    const chosenIds = new Set();
 
-    const pickUniqueUpTo = (arr, maxTotal) => {
-      for (const item of arr) {
-        if (chosen.length >= maxTotal) break;
-        if (!chosen.includes(item)) chosen.push(item);
-      }
-    };
+    function tryPush(item) {
+      if (!item || !item.id) return false;
+      if (chosenIds.has(item.id)) return false;
+      chosen.push(item);
+      chosenIds.add(item.id);
+      return true;
+    }
 
     const primaries = sorted.filter(e => e.isPrimary);
-    pickUniqueUpTo(primaries, Math.min(2, targetMainSlots));
+    for (const p of primaries) {
+      if (chosen.length >= Math.min(2, targetMainSlots)) break;
+      tryPush(p);
+    }
 
-    const compounds = sorted.filter(e => e.isCompound && !chosen.includes(e));
-    pickUniqueUpTo(compounds, targetMainSlots);
+    const compounds = sorted.filter(e => e.isCompound && !chosenIds.has(e.id));
+    for (const c of compounds) {
+      if (chosen.length >= targetMainSlots) break;
+      tryPush(c);
+    }
 
-    const accessories = sorted.filter(e => !e.isCompound && !e.isFinisher && !chosen.includes(e));
-    pickUniqueUpTo(accessories, targetMainSlots);
+    const accessories = sorted.filter(e => !e.isCompound && !e.isFinisher && !chosenIds.has(e.id));
+    for (const a of accessories) {
+      if (chosen.length >= targetMainSlots) break;
+      tryPush(a);
+    }
 
-    // If we still have room (rare), fill from sorted candidates
+    // If we still have room, fill from sorted candidates (non-finishers first)
     if (chosen.length < targetMainSlots) {
       for (const c of sorted) {
         if (chosen.length >= targetMainSlots) break;
-        if (!chosen.includes(c) && !(c.isFinisher)) chosen.push(c);
+        if (c.isFinisher) continue;
+        tryPush(c);
       }
     }
 
     // Append one finisher at the end if reserved and available
     if (reserveFinisher === 1) {
-      const fin = finishers.find(f => !chosen.includes(f));
-      if (fin) chosen.push(fin);
+      const fin = finishers.find(f => !chosenIds.has(f.id));
+      if (fin) tryPush(fin);
     }
 
     // Final trim to exercisesPerDay and map to plan items
